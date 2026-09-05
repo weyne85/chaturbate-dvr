@@ -44,7 +44,7 @@ func CreateChannel(c *gin.Context) {
 	}
 
 	for _, username := range strings.Split(req.Username, ",") {
-		server.Manager.CreateChannel(&entity.ChannelConfig{
+		if err := server.Manager.CreateChannel(&entity.ChannelConfig{
 			IsPaused:    false,
 			Username:    username,
 			Framerate:   req.Framerate,
@@ -53,28 +53,40 @@ func CreateChannel(c *gin.Context) {
 			MaxDuration: req.MaxDuration,
 			MaxFilesize: req.MaxFilesize,
 			CreatedAt:   time.Now().Unix(),
-		}, true)
+		}, true); err != nil {
+			c.AbortWithError(http.StatusBadRequest, fmt.Errorf("create channel %q: %w", username, err))
+			return
+		}
 	}
 	c.Redirect(http.StatusFound, "/")
 }
 
 // StopChannel stops a channel.
 func StopChannel(c *gin.Context) {
-	server.Manager.StopChannel(c.Param("username"))
+	if err := server.Manager.StopChannel(c.Param("username")); err != nil {
+		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("stop channel: %w", err))
+		return
+	}
 
 	c.Redirect(http.StatusFound, "/")
 }
 
 // PauseChannel pauses a channel.
 func PauseChannel(c *gin.Context) {
-	server.Manager.PauseChannel(c.Param("username"))
+	if err := server.Manager.PauseChannel(c.Param("username")); err != nil {
+		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("pause channel: %w", err))
+		return
+	}
 
 	c.Redirect(http.StatusFound, "/")
 }
 
 // ResumeChannel resumes a paused channel.
 func ResumeChannel(c *gin.Context) {
-	server.Manager.ResumeChannel(c.Param("username"))
+	if err := server.Manager.ResumeChannel(c.Param("username")); err != nil {
+		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("resume channel: %w", err))
+		return
+	}
 
 	c.Redirect(http.StatusFound, "/")
 }
