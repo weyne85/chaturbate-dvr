@@ -55,7 +55,9 @@ func (ch *Channel) Monitor() {
 	}
 
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
+		// A canceled context or an intentional pause are expected control-flow
+		// outcomes, not failures, so don't log them as errors.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, internal.ErrPaused) {
 			ch.Error("record stream: %s", err.Error())
 		}
 		if err := ch.Cleanup(); err != nil {
@@ -75,11 +77,15 @@ func (ch *Channel) Update() {
 func (ch *Channel) RecordStream(ctx context.Context, client *chaturbate.Client) error {
 	stream, err := client.GetStream(ctx, ch.Config.Username)
 	if err != nil {
+		ch.mu.Lock()
 		ch.IsOnline = false
+		ch.mu.Unlock()
 		return fmt.Errorf("get stream: %w", err)
 	}
+	ch.mu.Lock()
 	ch.IsOnline = true
 	ch.StreamedAt = time.Now().Unix()
+	ch.mu.Unlock()
 
 	if err := ch.NextFile(); err != nil {
 		return fmt.Errorf("next file: %w", err)
@@ -96,18 +102,26 @@ func (ch *Channel) RecordStream(ctx context.Context, client *chaturbate.Client) 
 
 // HandleSegment processes and writes segment data to a file.
 func (ch *Channel) HandleSegment(b []byte, duration float64) error {
-	if ch.Config.IsPaused {
+	ch.mu.RLock()
+	isPaused := ch.Config.IsPaused
+	file := ch.File
+	ch.mu.RUnlock()
+
+	if isPaused {
 		return retry.Unrecoverable(internal.ErrPaused)
 	}
 
-	n, err := ch.File.Write(b)
+	n, err := file.Write(b)
 	if err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
+	ch.mu.Lock()
 	ch.Filesize += n
 	ch.Duration += duration
-	ch.Info("duration: %s, filesize: %s", internal.FormatDuration(ch.Duration), internal.FormatFilesize(ch.Filesize))
+	filesize, dur := ch.Filesize, ch.Duration
+	ch.mu.Unlock()
+	ch.Info("duration: %s, filesize: %s", internal.FormatDuration(dur), internal.FormatFilesize(filesize))
 
 	// Send an SSE update to update the view
 	ch.Update()
@@ -116,7 +130,10 @@ func (ch *Channel) HandleSegment(b []byte, duration float64) error {
 		if err := ch.NextFile(); err != nil {
 			return fmt.Errorf("next file: %w", err)
 		}
-		ch.Info("max filesize or duration exceeded, new file created: %s", ch.File.Name())
+		ch.mu.RLock()
+		newFilename := ch.File.Name()
+		ch.mu.RUnlock()
+		ch.Info("max filesize or duration exceeded, new file created: %s", newFilename)
 		return nil
 	}
 	return nil

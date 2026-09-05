@@ -35,36 +35,47 @@ func (ch *Channel) NextFile() error {
 	}
 
 	// Increment the sequence number for the next file
+	ch.mu.Lock()
 	ch.Sequence++
+	ch.mu.Unlock()
 	return nil
 }
 
 // Cleanup cleans the file and resets it, called when the stream errors out or before next file was created.
 func (ch *Channel) Cleanup() error {
-	if ch.File == nil {
+	ch.mu.Lock()
+	file := ch.File
+	filesize := ch.Filesize
+	ch.mu.Unlock()
+
+	if file == nil {
 		return nil
 	}
 	defer func() {
+		ch.mu.Lock()
 		ch.Filesize = 0
 		ch.Duration = 0
+		ch.mu.Unlock()
 	}()
 
 	// Sync the file to ensure data is written to disk
-	if err := ch.File.Sync(); err != nil {
+	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync file: %w", err)
 	}
-	if err := ch.File.Close(); err != nil {
+	if err := file.Close(); err != nil {
 		return fmt.Errorf("close file: %w", err)
 	}
 
 	// Delete the empty file
-	if ch.Filesize <= 0 {
-		if err := os.Remove(ch.File.Name()); err != nil {
+	if filesize <= 0 {
+		if err := os.Remove(file.Name()); err != nil {
 			return fmt.Errorf("remove zero file: %w", err)
 		}
 	}
 
+	ch.mu.Lock()
 	ch.File = nil
+	ch.mu.Unlock()
 	return nil
 }
 
@@ -78,11 +89,15 @@ func (ch *Channel) GenerateFilename() (string, error) {
 		return "", fmt.Errorf("filename pattern error: %w", err)
 	}
 
+	ch.mu.RLock()
+	streamedAt, sequence := ch.StreamedAt, ch.Sequence
+	ch.mu.RUnlock()
+
 	// Get the current time based on the Unix timestamp when the stream was started
-	t := time.Unix(ch.StreamedAt, 0)
+	t := time.Unix(streamedAt, 0)
 	pattern := &Pattern{
 		Username: ch.Config.Username,
-		Sequence: ch.Sequence,
+		Sequence: sequence,
 		Year:     t.Format("2006"),
 		Month:    t.Format("01"),
 		Day:      t.Format("02"),
@@ -111,7 +126,9 @@ func (ch *Channel) CreateNewFile(filename string) error {
 		return fmt.Errorf("cannot open file: %s: %w", filename, err)
 	}
 
+	ch.mu.Lock()
 	ch.File = file
+	ch.mu.Unlock()
 	return nil
 }
 
@@ -120,6 +137,10 @@ func (ch *Channel) ShouldSwitchFile() bool {
 	maxFilesizeBytes := ch.Config.MaxFilesize * 1024 * 1024
 	maxDurationSeconds := ch.Config.MaxDuration * 60
 
-	return (ch.Duration >= float64(maxDurationSeconds) && ch.Config.MaxDuration > 0) ||
-		(ch.Filesize >= maxFilesizeBytes && ch.Config.MaxFilesize > 0)
+	ch.mu.RLock()
+	duration, filesize := ch.Duration, ch.Filesize
+	ch.mu.RUnlock()
+
+	return (duration >= float64(maxDurationSeconds) && ch.Config.MaxDuration > 0) ||
+		(filesize >= maxFilesizeBytes && ch.Config.MaxFilesize > 0)
 }

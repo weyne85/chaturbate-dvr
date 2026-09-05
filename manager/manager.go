@@ -41,7 +41,7 @@ func (m *Manager) SaveConfig() error {
 	var config []*entity.ChannelConfig
 
 	m.Channels.Range(func(key, value any) bool {
-		config = append(config, value.(*channel.Channel).Config)
+		config = append(config, value.(*channel.Channel).ExportConfig())
 		return true
 	})
 
@@ -90,12 +90,14 @@ func (m *Manager) LoadConfig() error {
 func (m *Manager) CreateChannel(conf *entity.ChannelConfig, shouldSave bool) error {
 	ch := channel.New(conf)
 
-	// prevent duplicate channels
-	_, ok := m.Channels.Load(conf.Username)
-	if ok {
+	// Atomically prevent duplicate channels; LoadOrStore avoids a race where
+	// two concurrent calls for the same username could both pass a separate check.
+	if _, loaded := m.Channels.LoadOrStore(conf.Username, ch); loaded {
+		// Someone else already owns this username: shut down the channel
+		// we just created so its background goroutine doesn't leak.
+		ch.Stop()
 		return fmt.Errorf("channel %s already exists", conf.Username)
 	}
-	m.Channels.Store(conf.Username, ch)
 
 	go ch.Resume(0)
 
