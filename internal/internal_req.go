@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,11 +31,10 @@ func CreateTransport() *http.Transport {
 	// such as HTTP_PROXY, HTTPS_PROXY.
 	defaultTransport := http.DefaultTransport.(*http.Transport)
 
-	newTransport := defaultTransport.Clone()
-	newTransport.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: true,
-	}
-	return newTransport
+	// Clone without overriding TLSClientConfig so certificate verification
+	// stays enabled (the default). Skipping verification would expose every
+	// request - including cookies and video data - to man-in-the-middle attacks.
+	return defaultTransport.Clone()
 }
 
 // Get sends an HTTP GET request and returns the response as a string.
